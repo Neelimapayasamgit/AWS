@@ -1,0 +1,231 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "challenge2aws",
+    "Parameters": {
+        "AMI":{
+            "Type":"String"
+          },
+          "Subnets":{
+            "Type":"CommaDelimitedList"
+          },
+          
+          "VPC":{
+            "Description": "make sure your vpc has route table and internetgateway",
+            "Type":"String"
+          },
+
+          
+          "LBsecuritygroup": {
+              "Description": "it should allow all ",
+              "Type": "String"
+          },
+          
+          "hostzone": {
+            "Description": "hostedzoneid",
+            "Type": "String",
+            "Default": "Z0800594PLXQQY14087E"
+        },
+         
+         "failovertype": {
+             "Description": "failover type",
+             "Type": "String",
+             "AllowedValues" : ["PRIMARY", "SECONDARY"]
+         },
+
+         "setid": {
+            "Description": "failover type",
+            "Type": "String"
+        },
+
+        
+        "recordname": {
+            "Description": "hostname is neelima.com ",
+            "Type": "String",
+            "Default": "neelima.com"
+        },
+                 
+          
+
+       
+                
+         
+          
+        "CPUPolicyTargetValue":{
+            "Type":"String"
+          },
+          "keyvaluepair": {
+            "Description": "Select the key value",
+            "Type": "AWS::EC2::KeyPair::KeyName"
+        },
+        "SSHLocation" : {
+          "Description" : "The IP address range that can be used to SSH to the EC2 instances",
+          "Type": "String",
+          "MinLength": "9",
+          "MaxLength": "18",
+          "Default": "0.0.0.0/0",
+          "AllowedPattern": "(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})/(\\d{1,2})",
+          "ConstraintDescription": "must be a valid IP CIDR range of the form x.x.x.x/x."
+        }
+    },
+
+    "Resources": {
+      "myLoadBalancer":{
+        "Type":"AWS::ElasticLoadBalancingV2::LoadBalancer",
+        "Properties":{
+          "Subnets":{
+            "Ref":"Subnets"
+          },
+          "SecurityGroups" : [
+          
+          { "Ref": "LBsecuritygroup" }
+          
+          ]
+            }
+      },
+      "myLoadBalancerListener":{
+        "Type":"AWS::ElasticLoadBalancingV2::Listener",
+        "Properties":{
+          "DefaultActions":[
+            {
+              "TargetGroupArn":{
+                "Ref":"myTargetGroup"
+              },
+              "Type":"forward"
+            }
+          ],
+          "LoadBalancerArn":{
+            "Ref":"myLoadBalancer"
+          },
+          "Port":80,
+          "Protocol":"HTTP"
+        }
+      },
+      "myTargetGroup":{
+        "Type":"AWS::ElasticLoadBalancingV2::TargetGroup",
+        "Properties":{
+          "Name":"myTargetGroup",
+          "HealthCheckIntervalSeconds" : 30,
+          "HealthCheckTimeoutSeconds" : 5,
+          "HealthyThresholdCount" : 3,
+          "UnhealthyThresholdCount" : 5,
+          "Port":8080,
+          "Protocol":"HTTP",
+          "VpcId":{
+            "Ref":"VPC"
+          }
+        }
+      },
+        
+        "openmrslc": {
+            "Type" : "AWS::AutoScaling::LaunchConfiguration",
+            "Properties" : {
+                "AssociatePublicIpAddress" : "True",
+                "ImageId":{
+                    "Ref":"AMI"
+                  },
+                "InstanceType" : "t2.micro",
+                "KeyName":  {
+                  "Ref": "keyvaluepair"
+              },
+              "SecurityGroups" : [
+                { "Ref": "InstanceSecurityGroup" }
+                ]
+               
+             }
+        },
+        
+        
+        
+        
+        "openmrsacg" : {
+            "Type" : "AWS::AutoScaling::AutoScalingGroup",
+            "Properties" : {
+                "VPCZoneIdentifier":{
+                    "Ref":"Subnets"
+                  },
+                "LaunchConfigurationName" :  {
+                    "Ref": "openmrslc"
+                },
+                
+                "MaxSize" : "3",
+                "MinSize" : "1",
+                "Tags" : [ {"Key" : "Name",
+                            "Value" : "acg",
+                            "PropagateAtLaunch" : "True"} 
+                        ],
+               "TargetGroupARNs" : [ { "Ref" : "myTargetGroup" } ]
+            }
+        },
+
+        "myCPUPolicy":{
+            "Type":"AWS::AutoScaling::ScalingPolicy",
+            "Properties":{
+              "AutoScalingGroupName":{
+                "Ref":"openmrsacg"
+              },
+              "PolicyType":"TargetTrackingScaling",
+              "TargetTrackingConfiguration":{
+                "PredefinedMetricSpecification":{
+                  "PredefinedMetricType":"ASGAverageCPUUtilization"
+                },
+                "TargetValue":{
+                  "Ref":"CPUPolicyTargetValue"
+                }
+              }
+            }
+          },
+           
+          "myDNSRecord" : {
+            "Type" : "AWS::Route53::RecordSet",
+            "Properties" : {
+               "HostedZoneId" : 
+               { "Ref": "hostzone" },
+               "AliasTarget" :{
+                 "DNSName" : { "Fn::GetAtt" : ["myLoadBalancer", "DNSName"] },
+                 "EvaluateTargetHealth" : "true",
+                 "HostedZoneId" : { "Fn::GetAtt" : ["myLoadBalancer", "CanonicalHostedZoneID"] }
+               },
+               "Failover": 
+               { "Ref": "failovertype" }
+               ,
+               "SetIdentifier": 
+               { "Ref": "setid" }
+               ,
+               "Name" : 
+               { "Ref": "recordname" }
+               ,
+               "Type" : "A"
+            }
+         },
+          
+
+          "InstanceSecurityGroup" : {
+            "Type" : "AWS::EC2::SecurityGroup",
+            "Properties" : {
+              "GroupDescription" : "Enable SSH access and HTTP from the load balancer only",
+              "SecurityGroupIngress" : [ {
+                "IpProtocol" : "tcp",
+                "FromPort" : "22",
+                "ToPort" : "22",
+                "CidrIp" : { "Ref" : "SSHLocation"}
+              },
+              {
+                "IpProtocol" : "tcp",
+                "FromPort" : "80",
+                "ToPort" : "8080",
+                "SourceSecurityGroupId" : 
+                { "Ref": "LBsecuritygroup" }
+                
+                } ],
+                "VpcId" : { "Ref" : "VPC" }
+              }
+            }
+          },
+    "Outputs" : {
+      "URL" : {
+        "Description" : "The URL of the website",
+        "Value" :  { "Fn::Join" : [ "", [ "http://", { "Fn::GetAtt" : [
+            "myLoadBalancer", "DNSName" ]}]]}
+      }
+    }
+}
